@@ -845,8 +845,10 @@ async def douyin_channel_videos(request: ChannelVideoListRequest):
             result = await asyncio.wait_for(get_channel_video_list(url), timeout=180.0)
             all_videos.extend(result.videos)
         except asyncio.TimeoutError:
+            logger.error(f"Channel scrape timed out for {url}")
             raise HTTPException(status_code=504, detail=f"Channel scrape timed out for {url}")
         except Exception as exc:
+            logger.exception(f"Error scraping {url}")
             raise HTTPException(status_code=500, detail=f"Error scraping {url}: {str(exc)}")
 
     # Filter out paid videos unless explicitly requested
