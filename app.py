@@ -817,6 +817,15 @@ async def browser_config():
         "using_user_data": chrome_user_data is not None
     }
 
+@app.get("/api/v1/douyin/screenshot")
+async def douyin_screenshot():
+    """Capture a screenshot of the active browser tab"""
+    from douyin_common import take_screenshot_bytes
+    img_bytes = await take_screenshot_bytes()
+    if img_bytes:
+        return Response(content=img_bytes, media_type="image/png")
+    raise HTTPException(status_code=404, detail="No active browser page found or browser is idle")
+
 # In-memory store for scrape tasks
 scrape_tasks: Dict[str, Dict] = {}
 

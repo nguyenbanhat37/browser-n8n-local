@@ -125,6 +125,18 @@ async def close_browser_context():
         _context = None
         logger.info("Persistent browser context closed")
 
+async def take_screenshot_bytes() -> Optional[bytes]:
+    """Capture a screenshot of the active page in the persistent browser context."""
+    global _context
+    if _context:
+        try:
+            pages = _context.pages
+            if pages:
+                return await pages[-1].screenshot(type="png")
+        except Exception as e:
+            logger.warning("Failed to take screenshot: %s", e)
+    return None
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
