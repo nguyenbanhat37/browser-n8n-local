@@ -79,7 +79,7 @@ async def get_browser_context() -> BrowserContext:
         headful = os.environ.get("BROWSER_USE_HEADFUL", "false").lower() == "true"
         launch_kwargs: dict = {
             "headless": not headful,
-            "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+            "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         }
         chrome_path = os.environ.get("CHROME_PATH") or CHROME_PATH
         if chrome_path and os.path.exists(chrome_path):
@@ -160,7 +160,7 @@ async def _launch_browser(playwright):
     headful = os.environ.get("BROWSER_USE_HEADFUL", "false").lower() == "true"
     launch_kwargs: dict = {
         "headless": not headful,
-        "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+        "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
     }
     chrome_path = os.environ.get("CHROME_PATH") or CHROME_PATH
     if chrome_path and os.path.exists(chrome_path):
