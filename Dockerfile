@@ -62,4 +62,4 @@ EXPOSE 7860
 ENV BROWSER_USE_HEADFUL=true
 
 # Command to run the application using Xvfb virtual display helper
-CMD ["xvfb-run", "--server-args=-screen 0 1280x1024x24 -ac", "python", "app.py"]
+CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x1024x24 -ac", "python", "app.py"]
