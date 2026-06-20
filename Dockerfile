@@ -38,14 +38,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY --chown=user:user . .
 
-# Create a data directory with proper permissions
+# Set Playwright browser path to a shared directory inside /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+
+# Install Playwright Chromium browser as root
+RUN python -m playwright install chromium
+
+# Create a data directory with proper permissions and change ownership to user
 RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
 
 # Switch to the non-root Hugging Face user
 USER user
-
-# Install Playwright Chromium browser
-RUN python -m playwright install chromium
 
 # Set default port to 7860 for Hugging Face Spaces
 ENV PORT=7860
