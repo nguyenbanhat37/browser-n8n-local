@@ -56,6 +56,9 @@ RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
 # Create X11-unix temp directory for Xvfb non-root execution
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
+# Make entrypoint.sh executable
+RUN chmod +x /app/entrypoint.sh
+
 # Switch to the non-root Hugging Face user
 USER user
 
@@ -64,5 +67,5 @@ ENV PORT=7860
 EXPOSE 7860
 ENV BROWSER_USE_HEADFUL=true
 
-# Command to run the application using Xvfb virtual display helper
-CMD ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x1024x24 -ac", "python", "app.py"]
+# Run using entrypoint script
+CMD ["./entrypoint.sh"]
