@@ -76,10 +76,18 @@ async def get_browser_context() -> BrowserContext:
 
         logger.info("Launching persistent browser context...")
         _playwright = await async_playwright().start()
-        launch_kwargs: dict = {"headless": False}
-        if CHROME_PATH:
-            launch_kwargs["executable_path"] = CHROME_PATH
-            logger.info("Using custom Chrome: %s", CHROME_PATH)
+        headful = os.environ.get("BROWSER_USE_HEADFUL", "false").lower() == "true"
+        launch_kwargs: dict = {
+            "headless": not headful,
+            "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+        }
+        chrome_path = os.environ.get("CHROME_PATH") or CHROME_PATH
+        if chrome_path and os.path.exists(chrome_path):
+            launch_kwargs["executable_path"] = chrome_path
+            logger.info("Using custom Chrome: %s", chrome_path)
+        else:
+            logger.info("Using Playwright bundled Chromium")
+            
         _browser = await _playwright.chromium.launch(**launch_kwargs)
         _context = await _browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -140,11 +148,16 @@ VIDEO_CARD_FALLBACK_SELECTORS = [
 from login_modal_handler import dismiss_login_modal
 
 async def _launch_browser(playwright):
-    """Launch Chromium in headful mode, using CHROME_PATH if set."""
-    launch_kwargs: dict = {"headless": False}
-    if CHROME_PATH:
-        launch_kwargs["executable_path"] = CHROME_PATH
-        logger.info("Using custom Chrome executable: %s", CHROME_PATH)
+    """Launch Chromium, respecting BROWSER_USE_HEADFUL (headless by default), using CHROME_PATH if set and exists."""
+    headful = os.environ.get("BROWSER_USE_HEADFUL", "false").lower() == "true"
+    launch_kwargs: dict = {
+        "headless": not headful,
+        "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+    }
+    chrome_path = os.environ.get("CHROME_PATH") or CHROME_PATH
+    if chrome_path and os.path.exists(chrome_path):
+        launch_kwargs["executable_path"] = chrome_path
+        logger.info("Using custom Chrome executable: %s", chrome_path)
     else:
         logger.info("Using Playwright bundled Chromium")
     return await playwright.chromium.launch(**launch_kwargs)

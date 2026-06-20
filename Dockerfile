@@ -44,8 +44,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 # Explicitly install playwright package to ensure it is available globally
 RUN pip install playwright
 
-# Install Playwright Chromium browser as root
+# Install Playwright Chromium browser and dependencies as root
 RUN python -m playwright install chromium
+RUN python -m playwright install-deps chromium
 
 # Create a data directory with proper permissions and change ownership to user
 RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
