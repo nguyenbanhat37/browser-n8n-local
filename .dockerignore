@@ -1,0 +1,13 @@
+venv/
+.git/
+.env
+hover.log
+user_msgs.txt
+.kiro/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.vscode/
+.idea/

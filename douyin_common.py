@@ -88,7 +88,15 @@ async def get_browser_context() -> BrowserContext:
         else:
             logger.info("Using Playwright bundled Chromium")
             
-        _browser = await _playwright.chromium.launch(**launch_kwargs)
+        try:
+            _browser = await _playwright.chromium.launch(**launch_kwargs)
+        except Exception as e:
+            if not launch_kwargs.get("headless"):
+                logger.warning("Failed to launch headful browser (%s). Retrying in headless mode...", e)
+                launch_kwargs["headless"] = True
+                _browser = await _playwright.chromium.launch(**launch_kwargs)
+            else:
+                raise
         _context = await _browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
@@ -160,7 +168,15 @@ async def _launch_browser(playwright):
         logger.info("Using custom Chrome executable: %s", chrome_path)
     else:
         logger.info("Using Playwright bundled Chromium")
-    return await playwright.chromium.launch(**launch_kwargs)
+    try:
+        return await playwright.chromium.launch(**launch_kwargs)
+    except Exception as e:
+        if not launch_kwargs.get("headless"):
+            logger.warning("Failed to launch headful browser (%s). Retrying in headless mode...", e)
+            launch_kwargs["headless"] = True
+            return await playwright.chromium.launch(**launch_kwargs)
+        else:
+            raise
 
 async def _navigate_to_channel(page, url: str) -> None:
     """Navigate to the Douyin channel URL."""
