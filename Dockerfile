@@ -45,7 +45,7 @@ RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
 USER user
 
 # Install Playwright Chromium browser
-RUN playwright install chromium
+RUN python -m playwright install chromium
 
 # Set default port to 7860 for Hugging Face Spaces
 ENV PORT=7860
