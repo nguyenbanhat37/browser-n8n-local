@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     procps \
     unzip \
     curl \
+    xvfb \
+    dbus-x11 \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -57,6 +59,7 @@ USER user
 # Set default port to 7860 for Hugging Face Spaces
 ENV PORT=7860
 EXPOSE 7860
+ENV BROWSER_USE_HEADFUL=true
 
-# Command to run the application
-CMD ["python", "app.py"]
+# Command to run the application using Xvfb virtual display helper
+CMD ["xvfb-run", "--server-args=-screen 0 1280x1024x24 -ac", "python", "app.py"]
