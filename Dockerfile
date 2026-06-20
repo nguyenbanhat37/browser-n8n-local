@@ -1,15 +1,16 @@
 FROM python:3.11-slim
 
+# Set work directory
 WORKDIR /app
 
-# Install essential packages and dependencies needed for Playwright
+# Install essential packages and system dependencies needed for Playwright Chromium
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
     procps \
     unzip \
-    # Additional dependencies that Playwright might need
+    curl \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -26,32 +27,29 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
+# Create user with UID 1000 required by Hugging Face Spaces
+RUN useradd -m -u 1000 user
+ENV PATH="/home/user/.local/bin:$PATH"
+
+# Copy requirements and install dependencies
+COPY --chown=user:user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
-COPY . .
+COPY --chown=user:user . .
 
 # Create a data directory with proper permissions
-RUN mkdir -p /app/data && chmod 777 /app/data
+RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
 
-# Expose the port the app runs on
-EXPOSE 8000
+# Switch to the non-root Hugging Face user
+USER user
 
-# Create a non-root user to run the app
-RUN adduser --disabled-password --gecos "" appuser
-# Give appuser permissions to the necessary directories
-RUN chown -R appuser:appuser /app
+# Install Playwright Chromium browser
+RUN playwright install chromium
 
-# Switch to appuser before installing browsers
-USER appuser
-
-# Install Playwright browsers
-RUN playwright install
-
-# Set healthcheck to ensure the service is running properly
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD curl -f http://localhost:8000/api/v1/ping || exit 1
+# Set default port to 7860 for Hugging Face Spaces
+ENV PORT=7860
+EXPOSE 7860
 
 # Command to run the application
-CMD ["python", "app.py"] 
+CMD ["python", "app.py"]

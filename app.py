@@ -1,12 +1,35 @@
 from __future__ import annotations
 
+import sys
+import platform
+
+# Mock platform / sys windows version calls to bypass Win32 API hangs caused by security software/Defender
+if sys.platform == "win32":
+    try:
+        from collections import namedtuple
+        uname_result = namedtuple("uname_result", ["system", "node", "release", "version", "machine", "processor"])
+        platform.uname = lambda: uname_result("Windows", "localhost", "10", "10.0.19045", "AMD64", "Intel64 Family")
+        platform.system = lambda: "Windows"
+        
+        class MockWindowsVersion:
+            major = 10
+            minor = 0
+            build = 22621
+            platform = 2
+            service_pack = ""
+            def __getitem__(self, item):
+                return (10, 0, 22621, 2, "")[item]
+        sys.getwindowsversion = lambda: MockWindowsVersion()
+    except Exception:
+        pass
+
 import asyncio
 import json
 import logging
 import os
 import uuid
 from typing import Dict, List, Optional, Union, Any
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
 
 import uvicorn
@@ -15,18 +38,93 @@ from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.encoders import jsonable_encoder
-from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_openai import AzureChatOpenAI
+
+# browser-use native LLM classes (implement the required BaseChatModel protocol)
+from browser_use.llm.anthropic.chat import ChatAnthropic as BUChatAnthropic
+from browser_use.llm.views import ChatInvokeUsage, ChatInvokeCompletion
+from browser_use.llm.openai.chat import ChatOpenAI as BUChatOpenAI
+from browser_use.llm.google.chat import ChatGoogle as BUChatGoogle
+from browser_use.llm.mistral.chat import ChatMistral as BUChatMistral
 from pydantic import BaseModel, Field
+
+class PatchedChatAnthropic(BUChatAnthropic):
+    def _get_usage(self, response: Any) -> Any:
+        try:
+            input_tokens = getattr(response.usage, 'input_tokens', 0) or 0
+            output_tokens = getattr(response.usage, 'output_tokens', 0) or 0
+            cache_read = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+            cache_creation = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+            
+            cache_creation_5m_tokens, cache_creation_1h_tokens = self._get_cache_creation_tokens(response)
+            
+            return ChatInvokeUsage(
+                prompt_tokens=input_tokens + cache_read,
+                completion_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+                prompt_cached_tokens=cache_read,
+                prompt_cache_creation_tokens=cache_creation,
+                prompt_cache_creation_5m_tokens=cache_creation_5m_tokens,
+                prompt_cache_creation_1h_tokens=cache_creation_1h_tokens,
+                prompt_image_tokens=None,
+                pricing_multiplier=self._get_pricing_multiplier(),
+            )
+        except Exception:
+            return None
+
+class PatchedChatOpenAI(BUChatOpenAI):
+    async def ainvoke(self, messages: list[Any], output_format: type[T] | None = None, **kwargs: Any) -> Any:
+        try:
+            return await super().ainvoke(messages, output_format, **kwargs)
+        except Exception as e:
+            if output_format is not None:
+                try:
+                    logger.info("Structured output validation failed, attempting to manually parse raw completion...")
+                    raw_completion = await super().ainvoke(messages, output_format=None, **kwargs)
+                    text = raw_completion.completion.strip()
+                    
+                    if text.startswith("```"):
+                        lines = text.splitlines()
+                        if len(lines) >= 3:
+                            text = "\n".join(lines[1:-1]).strip()
+                            
+                    if text.startswith("```json"):
+                        text = text[7:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    text = text.strip()
+                    
+                    parsed = output_format.model_validate_json(text)
+                    return ChatInvokeCompletion(
+                        completion=parsed,
+                        usage=raw_completion.usage,
+                        stop_reason=raw_completion.stop_reason,
+                    )
+                except Exception as inner_e:
+                    logger.error(f"Manual parsing fallback also failed: {inner_e}")
+                    raise e
+            raise
 
 # This import will work once browser-use is installed
 # For development, you may need to add the browser-use repo to your PYTHONPATH
 from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
-from browser_use import BrowserConfig, Browser
+from browser_use.browser.session import BrowserSession
+from douyin_scraper import (
+    scrape_douyin_channel,
+    ScrapeChannelRequest,
+    ScrapeChannelResponse,
+    get_channel_video_list,
+    get_video_detail,
+    run_phase2_background,
+    ChannelVideoListRequest,
+    ChannelVideoListResponse,
+    VideoDetailRequest,
+    VideoDetailResponse,
+)
 
 # Define task status enum
 class TaskStatus(str, Enum):
@@ -113,27 +211,120 @@ class TaskStatusResponse(BaseModel):
 
 # Utility functions
 def get_llm(ai_provider: str):
-    """Get LLM based on provider"""
+    """Get LLM based on provider.
+    
+    Uses browser-use native LLM classes which implement the required BaseChatModel
+    protocol (including the 'provider' property).
+    
+    If ai_provider is 'anthropic' and MEIAI_AUTH_TOKEN + MEIAI_BASE_URL are set,
+    the request is transparently routed to MeiAI (Anthropic-compatible proxy).
+    """
     if ai_provider == "anthropic":
-        return ChatAnthropic(model=os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-opus-20240229"))
-    elif ai_provider == "mistral":
-        return ChatMistralAI(model=os.environ.get("MISTRAL_MODEL_ID", "mistral-large-latest"))
-    elif ai_provider == "google":
-        return ChatGoogleGenerativeAI(model=os.environ.get("GOOGLE_MODEL_ID", "gemini-1.5-pro"))
-    elif ai_provider == "ollama":
-        return ChatOllama(model=os.environ.get("OLLAMA_MODEL_ID", "llama3"))
-    elif ai_provider == "azure":
-        return AzureChatOpenAI(
-            azure_deployment=os.environ.get("AZURE_DEPLOYMENT_NAME"),
-            openai_api_version=os.environ.get("AZURE_API_VERSION", "2023-05-15"),
-            azure_endpoint=os.environ.get("AZURE_ENDPOINT")
+        base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("MEIAI_BASE_URL")
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("MEIAI_AUTH_TOKEN")
+        model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("MEIAI_MODEL_ID") or os.environ.get("ANTHROPIC_MODEL_ID", "claude-3-opus-20240229")
+        
+        if base_url:
+            if "9router" in base_url or model == "gemini":
+                logger.info(f"Routing 'anthropic' provider to OpenAI-compatible client for proxy: {base_url}")
+                openai_base_url = base_url
+                if not openai_base_url.endswith("/v1") and not openai_base_url.endswith("/v1/"):
+                    openai_base_url = openai_base_url.rstrip("/") + "/v1"
+                return PatchedChatOpenAI(
+                    model=model,
+                    api_key=auth_token or os.environ.get("ANTHROPIC_API_KEY"),
+                    base_url=openai_base_url,
+                    dont_force_structured_output=True,
+                    add_schema_to_system_prompt=True,
+                )
+                
+            logger.info(f"Routing 'anthropic' provider to custom proxy: {base_url}")
+            kwargs = {
+                "model": model,
+                "base_url": base_url,
+            }
+            if auth_token:
+                kwargs["auth_token"] = auth_token
+                kwargs["api_key"] = auth_token
+            else:
+                kwargs["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
+            return PatchedChatAnthropic(**kwargs)
+            
+        return PatchedChatAnthropic(
+            model=model,
+            api_key=os.environ.get("ANTHROPIC_API_KEY"),
         )
-    else:  # default to OpenAI
+    elif ai_provider == "meiai":
+        base_url = os.environ.get("MEIAI_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL", "https://meiai.onrender.com")
+        auth_token = os.environ.get("MEIAI_AUTH_TOKEN") or os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+        model = os.environ.get("MEIAI_MODEL_ID") or os.environ.get("ANTHROPIC_MODEL", "deepseek-v4-flash")
+        
+        if "9router" in base_url or model == "gemini":
+            openai_base_url = base_url
+            if not openai_base_url.endswith("/v1") and not openai_base_url.endswith("/v1/"):
+                openai_base_url = openai_base_url.rstrip("/") + "/v1"
+            return PatchedChatOpenAI(
+                model=model,
+                api_key=auth_token,
+                base_url=openai_base_url,
+                dont_force_structured_output=True,
+                add_schema_to_system_prompt=True,
+            )
+            
+        kwargs = {
+            "model": model,
+            "base_url": base_url,
+        }
+        if auth_token:
+            kwargs["auth_token"] = auth_token
+            kwargs["api_key"] = auth_token
+        return PatchedChatAnthropic(**kwargs)
+    elif ai_provider == "openai":
+        kwargs = {
+            "model": os.environ.get("OPENAI_MODEL_ID", "gpt-4o"),
+            "api_key": os.environ.get("OPENAI_API_KEY"),
+        }
         base_url = os.environ.get("OPENAI_BASE_URL")
-        kwargs = {"model": os.environ.get("OPENAI_MODEL_ID", "gpt-4o")}
         if base_url:
             kwargs["base_url"] = base_url
-        return ChatOpenAI(**kwargs)
+            if "9router" in base_url or "gemini" in kwargs["model"]:
+                kwargs["dont_force_structured_output"] = True
+                kwargs["add_schema_to_system_prompt"] = True
+        return PatchedChatOpenAI(**kwargs)
+    elif ai_provider == "google":
+        return BUChatGoogle(
+            model=os.environ.get("GOOGLE_MODEL_ID", "gemini-1.5-pro"),
+            api_key=os.environ.get("GOOGLE_API_KEY"),
+        )
+    elif ai_provider == "mistral":
+        return BUChatMistral(
+            model=os.environ.get("MISTRAL_MODEL_ID", "mistral-large-latest"),
+            api_key=os.environ.get("MISTRAL_API_KEY"),
+        )
+    elif ai_provider == "ollama":
+        # Ollama uses OpenAI-compatible API, route via BUChatOpenAI with local base_url
+        return PatchedChatOpenAI(
+            model=os.environ.get("OLLAMA_MODEL_ID", "llama3"),
+            api_key="ollama",  # Ollama doesn't need a real key
+            base_url=os.environ.get("OLLAMA_API_BASE", "http://localhost:11434") + "/v1",
+        )
+    elif ai_provider == "azure":
+        from browser_use.llm.azure.chat import ChatAzureOpenAI as BUChatAzure
+        return BUChatAzure(
+            model=os.environ.get("AZURE_DEPLOYMENT_NAME", "gpt-4o"),
+            api_key=os.environ.get("AZURE_API_KEY"),
+            azure_endpoint=os.environ.get("AZURE_ENDPOINT"),
+        )
+    else:
+        # Default to OpenAI
+        kwargs = {
+            "model": os.environ.get("OPENAI_MODEL_ID", "gpt-4o"),
+            "api_key": os.environ.get("OPENAI_API_KEY"),
+        }
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        if base_url:
+            kwargs["base_url"] = base_url
+        return PatchedChatOpenAI(**kwargs)
 
 async def execute_task(task_id: str, instruction: str, ai_provider: str):
     """Execute browser task in background
@@ -180,30 +371,27 @@ async def execute_task(task_id: str, instruction: str, ai_provider: str):
         
         # Only configure and include browser if we need a custom browser setup
         if not headful or chrome_path:
-            extra_chromium_args = []
-            # Configure browser
-            browser_config_args = {
+            # Configure BrowserSession directly (new browser-use API)
+            session_kwargs = {
                 "headless": not headful,
             }
-            # For older Chrome versions
-            extra_chromium_args += ["--headless=new"]
-            logger.info(f"Task {task_id}: Browser config args: {browser_config_args.get('headless')}")
+
             # Add Chrome executable path if provided
             if chrome_path:
-                browser_config_args["chrome_instance_path"] = chrome_path
+                session_kwargs["executable_path"] = chrome_path
                 logger.info(f"Task {task_id}: Using custom Chrome executable: {chrome_path}")
-                
-            
+
             # Add Chrome user data directory if provided
             if chrome_user_data:
-                extra_chromium_args += [f"--user-data-dir={chrome_user_data}"]
+                session_kwargs["user_data_dir"] = chrome_user_data
                 logger.info(f"Task {task_id}: Using Chrome user data directory: {chrome_user_data}")
-            
-            browser_config = BrowserConfig(**browser_config_args)
-            browser = Browser(config=browser_config)
-            
-            # Add browser to agent kwargs
-            agent_kwargs["browser"] = browser
+
+            logger.info(f"Task {task_id}: Browser session args: headless={session_kwargs.get('headless')}")
+
+            browser = BrowserSession(**session_kwargs)
+
+            # Add browser session to agent kwargs
+            agent_kwargs["browser_session"] = browser
         
         logger.info(f"Agent kwargs: {agent_kwargs}")
         # Pass the browser to Agent
@@ -233,63 +421,66 @@ async def execute_task(task_id: str, instruction: str, ai_provider: str):
         # Run agent
         result = await agent.run()
         
-        # Update finished timestamp
-        tasks[task_id]["finished_at"] = datetime.utcnow().isoformat() + "Z"
-        
-        # Update task status
-        tasks[task_id]["status"] = TaskStatus.FINISHED
-        
-        # Extract result
+        # Extract result FIRST before any cleanup
         if isinstance(result, AgentHistoryList):
             final_result = result.final_result()
             tasks[task_id]["output"] = final_result
         else:
-            tasks[task_id]["output"] = str(result)
+            tasks[task_id]["output"] = str(result) if result else None
+
+        # Only mark finished if we actually got a result
+        if tasks[task_id]["output"] is not None:
+            tasks[task_id]["status"] = TaskStatus.FINISHED
+        else:
+            # Agent ran but returned no result - treat as failure
+            tasks[task_id]["status"] = TaskStatus.FAILED
+            tasks[task_id]["error"] = "Agent completed but returned no output. Check browser config or task instructions."
+            logger.warning(f"Task {task_id}: agent returned no output (steps: {len(tasks[task_id]['steps'])})")
+
+        tasks[task_id]["finished_at"] = datetime.now(UTC).isoformat()
         
-        # Collect browser data if requested
-        if tasks[task_id]["save_browser_data"] and hasattr(agent, "browser"):
+        # Collect browser data if requested (non-critical, errors won't affect task status)
+        if tasks[task_id]["save_browser_data"] and hasattr(agent, "browser_session"):
             try:
-                # Try multiple approaches to collect browser data
-                if hasattr(agent.browser, "get_cookies"):
-                    # Direct method if available
-                    cookies = await agent.browser.get_cookies()
+                browser_session = agent.browser_session
+                if hasattr(browser_session, "get_cookies"):
+                    cookies = await browser_session.get_cookies()
                     tasks[task_id]["browser_data"] = {"cookies": cookies}
-                elif hasattr(agent.browser, "page") and hasattr(agent.browser.page, "cookies"):
-                    # Try Playwright's page.cookies() method
-                    cookies = await agent.browser.page.cookies()
-                    tasks[task_id]["browser_data"] = {"cookies": cookies}
-                elif hasattr(agent.browser, "context") and hasattr(agent.browser.context, "cookies"):
-                    # Try Playwright's context.cookies() method
-                    cookies = await agent.browser.context.cookies()
+                elif hasattr(browser_session, "context") and hasattr(browser_session.context, "cookies"):
+                    cookies = await browser_session.context.cookies()
                     tasks[task_id]["browser_data"] = {"cookies": cookies}
                 else:
-                    logger.warning(f"No known method to collect cookies for task {task_id}")
                     tasks[task_id]["browser_data"] = {"cookies": [], "error": "No method available to collect cookies"}
             except Exception as e:
-                logger.error(f"Failed to collect browser data: {str(e)}")
+                logger.warning(f"Could not collect browser data for task {task_id} (non-critical): {str(e)}")
                 tasks[task_id]["browser_data"] = {"cookies": [], "error": str(e)}
                 
     except Exception as e:
         logger.exception(f"Error executing task {task_id}")
-        tasks[task_id]["status"] = TaskStatus.FAILED
-        tasks[task_id]["error"] = str(e)
-        tasks[task_id]["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        # Only mark as FAILED if not already finished successfully
+        if tasks[task_id].get("status") != TaskStatus.FINISHED:
+            tasks[task_id]["status"] = TaskStatus.FAILED
+            tasks[task_id]["error"] = str(e)
+            tasks[task_id]["finished_at"] = datetime.now(UTC).isoformat()
+        else:
+            # Task completed but had post-processing error (e.g. browser cleanup)
+            logger.warning(f"Task {task_id} completed successfully but had cleanup error: {str(e)}")
     finally:
-        # Always close the browser, regardless of success or failure
+        # Always close the browser session, regardless of success or failure
         if browser is not None:
-            logger.info(f"Closing browser for task {task_id}")
+            logger.info(f"Closing browser session for task {task_id}")
             try:
-                await browser.close()
-                logger.info(f"Browser closed successfully for task {task_id}")
+                await browser.stop()
+                logger.info(f"Browser session closed successfully for task {task_id}")
             except Exception as e:
-                logger.error(f"Error closing browser for task {task_id}: {str(e)}")
+                logger.error(f"Error closing browser session for task {task_id}: {str(e)}")
 
 # API Routes
 @app.post("/api/v1/run-task", response_model=TaskResponse)
 async def run_task(request: TaskRequest):
     """Start a browser automation task"""
     task_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(UTC).isoformat()
     
     # Initialize task record
     tasks[task_id] = {
@@ -365,7 +556,7 @@ async def stop_task(task_id: str):
         return {"message": "Task stopping"}
     else:
         tasks[task_id]["status"] = TaskStatus.STOPPED
-        tasks[task_id]["finished_at"] = datetime.utcnow().isoformat() + "Z"
+        tasks[task_id]["finished_at"] = datetime.now(UTC).isoformat()
         return {"message": "Task stopped (no agent found)"}
 
 @app.put("/api/v1/pause-task/{task_id}")
@@ -573,6 +764,39 @@ async def ping():
     """Health check endpoint"""
     return {"status": "success", "message": "API is running"}
 
+@app.get("/api/v1/providers")
+async def list_providers():
+    """List available AI providers and their active configuration.
+    
+    When MeiAI is configured, the 'anthropic' provider is transparently routed to MeiAI.
+    """
+    meiai_token = os.environ.get("MEIAI_AUTH_TOKEN") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    meiai_base_url = os.environ.get("MEIAI_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+    meiai_active = bool(meiai_token and meiai_base_url)
+    proxy_model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("MEIAI_MODEL_ID", "deepseek-v4-flash")
+
+    return {
+        "providers": [
+            {
+                "id": "anthropic",
+                "label": "Anthropic (Claude)" if not meiai_active else f"Proxy via anthropic [{proxy_model}]",
+                "active": meiai_active or bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "routed_to_meiai": meiai_active,
+            },
+            {
+                "id": "meiai",
+                "label": f"MeiAI/Proxy [{proxy_model}]",
+                "active": meiai_active,
+                "routed_to_meiai": meiai_active,
+            },
+            {"id": "openai",    "label": "OpenAI",      "active": bool(os.environ.get("OPENAI_API_KEY"))},
+            {"id": "mistral",   "label": "MistralAI",   "active": bool(os.environ.get("MISTRAL_API_KEY"))},
+            {"id": "google",    "label": "Google AI",   "active": bool(os.environ.get("GOOGLE_API_KEY"))},
+            {"id": "azure",     "label": "Azure OpenAI","active": bool(os.environ.get("AZURE_API_KEY"))},
+            {"id": "ollama",    "label": "Ollama",      "active": bool(os.environ.get("OLLAMA_API_BASE"))},
+        ]
+    }
+
 @app.get("/api/v1/browser-config")
 async def browser_config():
     """Get current browser configuration
@@ -592,6 +816,145 @@ async def browser_config():
         "using_custom_chrome": chrome_path is not None,
         "using_user_data": chrome_user_data is not None
     }
+
+# In-memory store for scrape tasks
+scrape_tasks: Dict[str, Dict] = {}
+
+
+@app.post("/api/v1/douyin/channel-videos", response_model=ChannelVideoListResponse)
+async def douyin_channel_videos(request: ChannelVideoListRequest):
+    """
+    Phase 1: Get video list from one or more channel pages. Returns immediately (~30s per URL).
+    Also spawns Phase 2 in background — stream URLs processed while you receive this response.
+    Poll GET /api/v1/douyin/stream-results/{task_id} for full results with stream URLs.
+    """
+    # Normalize input to list of URLs
+    urls = [request.url] if isinstance(request.url, str) else request.url
+    
+    # Basic validation
+    for url in urls:
+        if "/user/" not in url:
+            raise HTTPException(status_code=400, detail=f"URL must contain /user/: {url}")
+            
+    all_videos = []
+    scraped_at = datetime.now(UTC).isoformat()
+    
+    # Process each URL sequentially
+    for url in urls:
+        try:
+            result = await asyncio.wait_for(get_channel_video_list(url), timeout=180.0)
+            all_videos.extend(result.videos)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail=f"Channel scrape timed out for {url}")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Error scraping {url}: {str(exc)}")
+
+    # Filter out paid videos unless explicitly requested
+    is_paid_filter = request.is_paid if request.is_paid is not None else False
+    if not is_paid_filter:
+        filtered_videos = [v for v in all_videos if not v.is_paid]
+    else:
+        filtered_videos = all_videos
+
+    task_id = str(uuid.uuid4())
+    
+    # Always spawn Phase 2 background task
+    scrape_tasks[task_id] = {
+        "stream_task_id": task_id,
+        "status": "running",
+        "channel_url": request.url,
+        "total": len(filtered_videos),
+        "completed": 0,
+        "videos": [v.model_dump() for v in filtered_videos],
+        "error": None,
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    asyncio.create_task(run_phase2_background(task_id, scrape_tasks))
+
+    return ChannelVideoListResponse(
+        channel_url=request.url,
+        scraped_at=scraped_at,
+        total=len(filtered_videos),
+        videos=filtered_videos,
+        stream_task_id=task_id
+    )
+
+
+@app.get("/api/v1/douyin/stream-results/{task_id}")
+async def douyin_stream_results(task_id: str):
+    """
+    Poll Phase 2 results. Returns current progress + all completed video details.
+    status: running (still processing) | finished (all done) | failed
+    """
+    if task_id not in scrape_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Confirm the background task to proceed if it hasn't already
+    scrape_tasks[task_id]["confirmed"] = True
+    
+    task = scrape_tasks[task_id]
+    return {
+        "stream_task_id": task["stream_task_id"],
+        "status": task["status"],
+        "total": task["total"],
+        "completed": task["completed"],
+        "videos": task["videos"],
+        "error": task.get("error"),
+    }
+
+
+@app.post("/api/v1/douyin/video-detail", response_model=VideoDetailResponse)
+async def douyin_video_detail(request: VideoDetailRequest):
+    """Get stream URLs + metadata for a single Douyin video. ~15-20s per call.
+    Uses persistent browser (reuses session if channel was loaded recently)."""
+    if "/video/" not in request.url:
+        raise HTTPException(status_code=400, detail="URL must contain /video/")
+    try:
+        return await asyncio.wait_for(get_video_detail(request.url), timeout=60.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Video detail timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class DouyinScrapeRequest(BaseModel):
+    url: Union[str, List[str]]  # single channel URL or list of URLs
+    is_paid: Optional[bool] = None  # None/True = include paid videos; False = exclude paid videos
+
+
+@app.post("/api/v1/scrape-douyin-channel")
+async def scrape_douyin_channel_endpoint(request: DouyinScrapeRequest):
+    """
+    Full Douyin channel scrape — synchronous, returns result directly.
+    Accepts single URL or list of channel URLs.
+    
+    is_paid:
+      - true or omitted: include all videos (both free and paid)
+      - false: exclude paid videos (is_paid=True) from results
+    
+    Note: Takes 5-15 minutes depending on number of videos.
+    Set HTTP client timeout to at least 900s (15 min).
+    """
+    urls = [request.url] if isinstance(request.url, str) else request.url
+    for u in urls:
+        if "/user/" not in u:
+            raise HTTPException(
+                status_code=400,
+                detail=f"URL must contain /user/: {u}",
+            )
+    include_paid = request.is_paid is not False  # True unless explicitly False
+    try:
+        result = await asyncio.wait_for(
+            scrape_douyin_channel(request.url, include_paid=include_paid),
+            timeout=900.0
+        )
+        return result
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Scrape timed out after 15 minutes")
+    except Exception as exc:
+        logger.exception("scrape-douyin-channel failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 # Run server if executed directly
 if __name__ == "__main__":

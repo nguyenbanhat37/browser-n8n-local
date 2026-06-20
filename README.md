@@ -63,6 +63,46 @@ This is a local bridge service that enables n8n to communicate with the Browser 
 | PUT    | /api/v1/pause-task/{task_id}  | Pause a running task         |
 | PUT    | /api/v1/resume-task/{task_id} | Resume a paused task         |
 | GET    | /api/v1/list-tasks            | List all tasks               |
+| GET    | /live/{task_id}               | Live HTML view of a task     |
+| GET    | /api/v1/ping                  | Health check                 |
+| GET    | /api/v1/providers             | List AI providers            |
+| GET    | /api/v1/browser-config        | Get browser configuration    |
+| POST   | /api/v1/douyin/channel-videos | Get video list from channel  |
+| GET    | /api/v1/douyin/stream-results/{task_id} | Poll background scrape results |
+| POST   | /api/v1/douyin/video-detail   | Get single video detail      |
+| POST   | /api/v1/scrape-douyin-channel | Start sync full scrape task  |
+| GET    | /api/v1/scrape-task/{task_id} | Get status of full scrape    |
+
+### Detailed API Descriptions
+
+#### 1. Douyin Scraper APIs
+*   **`POST /api/v1/douyin/channel-videos`**: Lấy danh sách video từ trang chủ của kênh (trả về ngay lập tức). Đồng thời tạo một task chạy ngầm (Phase 2) nếu hệ thống được cấu hình theo Luồng 2.
+*   **`GET /api/v1/douyin/stream-results/{task_id}`**: Dùng để polling (kiểm tra định kỳ) kết quả từ quá trình chạy ngầm Phase 2. Trả về tiến độ và danh sách stream URLs.
+*   **`POST /api/v1/douyin/video-detail`**: Truyền vào URL của một video độc lập để bắt luồng video/audio và lấy thông tin chi tiết ngay lập tức.
+*   **`POST /api/v1/scrape-douyin-channel`**: Chạy đồng bộ trọn gói quá trình cào kênh (cào danh sách sau đó tự động chui vào cào chi tiết). Hàm này trả về `task_id`.
+*   **`GET /api/v1/scrape-task/{task_id}`**: Lấy kết quả và trạng thái của tiến trình cào đồng bộ trọn gói ở trên.
+
+#### 2. Browser Use Task Management APIs (AI Agent)
+*   **`POST /api/v1/run-task`**: Khởi chạy một AI Agent mới với một chỉ thị đầu vào (task) và cấu hình mô hình AI mong muốn (OpenAI, Anthropic, Mistral...).
+*   **`GET /api/v1/list-tasks`**: Xem danh sách toàn bộ các AI Task đang hoặc đã chạy trên hệ thống.
+*   **`GET /api/v1/task/{task_id}`**: Lấy thông tin chi tiết đầy đủ của một Task bao gồm các bước Agent đã thực thi (steps), kết quả và lỗi (nếu có).
+*   **`GET /api/v1/task/{task_id}/status`**: Dùng để polling trạng thái của Task (`running`, `finished`, `failed`, `paused`...).
+*   **`PUT /api/v1/stop-task/{task_id}`**: Dừng khẩn cấp một Task đang chạy.
+*   **`PUT /api/v1/pause-task/{task_id}`**: Tạm dừng (Pause) quá trình xử lý của Agent đối với một Task.
+*   **`PUT /api/v1/resume-task/{task_id}`**: Tiếp tục (Resume) một Task đang bị tạm dừng.
+
+#### 3. System Utility APIs
+*   **`GET /live/{task_id}`**: Trả về một trang giao diện HTML trực quan. Bạn có thể mở trên trình duyệt web để theo dõi tiến trình (Log steps và Control panel) của một AI Task.
+*   **`GET /api/v1/ping`**: Health check. Dùng để kiểm tra xem server có đang hoạt động bình thường không.
+*   **`GET /api/v1/providers`**: Liệt kê các nhà cung cấp AI LLM hiện tại đã được thiết lập đủ Key trong file `.env` (Ví dụ: OpenAI là `active`, Azure là `inactive`).
+*   **`GET /api/v1/browser-config`**: Liệt kê thông tin cấu hình môi trường trình duyệt hiện tại (headful/headless, đường dẫn thư mục user_data_dir...).
+
+### Douyin Scraper Flows
+
+The system provides three distinct processing flows for Douyin scraping:
+- **Luồng 1:** `POST /api/v1/douyin/channel-videos` (Lấy danh sách xong dừng) -> Loop từng URL gọi `POST /api/v1/douyin/video-detail`.
+- **Luồng 2:** `POST /api/v1/douyin/channel-videos` (Lấy danh sách) -> Chờ và lặp gọi `GET /api/v1/douyin/stream-results/{task_id}` để hệ thống ngầm xử lý tiếp.
+- **Luồng 3:** `POST /api/v1/scrape-douyin-channel` (Luồng cào đồng bộ trọn gói, gộp cả lấy danh sách và chi tiết).
 
 ## Usage Examples
 

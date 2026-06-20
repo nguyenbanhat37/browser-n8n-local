@@ -42,6 +42,16 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Set to true to see the browser during execution
       - BROWSER_USE_HEADFUL=${BROWSER_USE_HEADFUL:-false}
+
+      # MeiAI Configuration (Anthropic-compatible proxy)
+      - MEIAI_BASE_URL=${MEIAI_BASE_URL:-https://meiai.onrender.com}
+      - MEIAI_AUTH_TOKEN=${MEIAI_AUTH_TOKEN}
+      - MEIAI_MODEL_ID=${MEIAI_MODEL_ID:-deepseek-v4-flash}
+      
+      # Anthropic Custom Proxy Configuration
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://9router-1.up.railway.app}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-gemini}
     volumes:
       # Mount local directory to persist browser data and task results
       - ./data:/app/data

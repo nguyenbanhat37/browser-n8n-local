@@ -1,0 +1,206 @@
+{
+  "name": "n8n-browser-use-strict-flow",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -896,
+        96
+      ],
+      "id": "2a2f26c1-7f96-40c5-bb66-81bced4e35bc",
+      "name": "When chat message received",
+      "webhookId": "022202b0-0ca5-4ab7-9cd5-bd75a1034f50"
+    },
+    {
+      "parameters": {
+        "connectionType": "local",
+        "instructions": "={{ $json.chatInput }}",
+        "aiProvider": "anthropic"
+      },
+      "type": "n8n-nodes-browser-use.browserUse",
+      "typeVersion": 1,
+      "position": [
+        -672,
+        96
+      ],
+      "id": "429dfb30-78f6-4899-b756-c198f69ab4a1",
+      "name": "Run Task",
+      "credentials": {
+        "browserUseLocalBridgeApi": {
+          "id": "c3q2MqUY7pcJUIWg",
+          "name": "Browser Use Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "abc62805-5141-41bc-840e-8368d2e69ac7",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "finished",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -224,
+        16
+      ],
+      "id": "3f609ebc-6074-42a8-82e5-78ed699c1c51",
+      "name": "If"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        96
+      ],
+      "id": "4c7654d1-ec8e-491c-b945-48ab77869908",
+      "name": "Wait1",
+      "webhookId": "ef9caf80-c999-4816-9c3d-7eecc8c1b41e"
+    },
+    {
+      "parameters": {
+        "connectionType": "local",
+        "operation": "getTaskStatus",
+        "taskId": "={{ $json.id }}"
+      },
+      "type": "n8n-nodes-browser-use.browserUse",
+      "typeVersion": 1,
+      "position": [
+        -448,
+        96
+      ],
+      "id": "2014632e-ad4f-401d-8ce0-a998e288a130",
+      "name": "Browser Use1",
+      "credentials": {
+        "browserUseLocalBridgeApi": {
+          "id": "c3q2MqUY7pcJUIWg",
+          "name": "Browser Use Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "connectionType": "local",
+        "operation": "getTask",
+        "taskId": "={{ $('Run Task').item.json.id }}"
+      },
+      "type": "n8n-nodes-browser-use.browserUse",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        -64
+      ],
+      "id": "89fdc941-5486-45e2-979a-3f412a4f3141",
+      "name": "Browser Use2",
+      "credentials": {
+        "browserUseLocalBridgeApi": {
+          "id": "c3q2MqUY7pcJUIWg",
+          "name": "Browser Use Cloud account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Run Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Task": {
+      "main": [
+        [
+          {
+            "node": "Browser Use1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Browser Use2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Browser Use1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Browser Use1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "b0f8e5b4-6c8f-4398-bd7b-526880c4c3cb",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "557de3b8b6a7bf2a785d914dd2a23e0f8bf6c2b6b5542594b5430603b710b1ae"
+  },
+  "nodeGroups": [],
+  "id": "XJJtY5GLJh4y7C0K",
+  "tags": []
+}
