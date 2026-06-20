@@ -41,6 +41,9 @@ COPY --chown=user:user . .
 # Set Playwright browser path to a shared directory inside /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 
+# Explicitly install playwright package to ensure it is available globally
+RUN pip install playwright
+
 # Install Playwright Chromium browser as root
 RUN python -m playwright install chromium
 
