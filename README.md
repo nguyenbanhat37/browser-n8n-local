@@ -1,3 +1,13 @@
+---
+title: Browser N8n Local
+emoji: 🌐
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Browser Use Local Bridge for n8n
 
 This is a local bridge service that enables n8n to communicate with the Browser Use Python library. It mimics the Browser Use Cloud API endpoints but runs locally, allowing you to execute browser automation tasks without relying on the cloud service.
