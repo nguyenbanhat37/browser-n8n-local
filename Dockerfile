@@ -53,6 +53,9 @@ RUN python -m playwright install-deps chromium
 # Create a data directory with proper permissions and change ownership to user
 RUN mkdir -p /app/data && chmod 777 /app/data && chown -R user:user /app
 
+# Create X11-unix temp directory for Xvfb non-root execution
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
 # Switch to the non-root Hugging Face user
 USER user
 
